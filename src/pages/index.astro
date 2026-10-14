@@ -1,9 +1,11 @@
 ---
 import Layout from "@/layouts/Layout.astro";
+import Liquidador from "@/components/Liquidador";
 ---
 
-<Layout>
-	<h1 class="text-2xl font-bold text-center py-20">
-		Hello World!!
-	</h1>
+<Layout
+	title="Liquidador de retención"
+	description="Saca PN, PJ, arriendo, compras y los valores del balance desde los informes de Siigo."
+>
+	<Liquidador client:only="react" />
 </Layout>
