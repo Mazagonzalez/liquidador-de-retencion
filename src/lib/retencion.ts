@@ -10,8 +10,11 @@ export interface Movimiento {
     identificacion: string;
     tercero: string;
     fecha: string;
+    /** Ya neto: compras menos devoluciones. */
     base: number;
     retencion: number;
+    devolucionBase: number;
+    devolucionRetencion: number;
     persona: Persona;
 }
 
@@ -133,9 +136,12 @@ function leerImpuestos(filas: Fila[]): GrupoImpuesto[] | null {
         if (!primera) continue;
         if (/^procesado/i.test(primera)) break;
 
-        const base = numero(f[cBase]) - (cBaseDev >= 0 ? numero(f[cBaseDev]) : 0);
-        const retencion =
-            numero(f[cValor]) - (cValorDev >= 0 ? numero(f[cValorDev]) : 0);
+        // Las notas crédito llegan en las columnas de devolución de compras y
+        // se restan de la base y de la retención.
+        const devolucionBase = cBaseDev >= 0 ? numero(f[cBaseDev]) : 0;
+        const devolucionRetencion = cValorDev >= 0 ? numero(f[cValorDev]) : 0;
+        const base = numero(f[cBase]) - devolucionBase;
+        const retencion = numero(f[cValor]) - devolucionRetencion;
 
         if (/^tipo\s*:/i.test(primera)) {
             actual = null;
@@ -155,7 +161,14 @@ function leerImpuestos(filas: Fila[]): GrupoImpuesto[] | null {
         }
         if (!actual) continue;
         // Las filas que solo tienen ventas (retenciones que nos practicaron) no van.
-        if (base === 0 && retencion === 0) continue;
+        if (
+            base === 0 &&
+            retencion === 0 &&
+            devolucionBase === 0 &&
+            devolucionRetencion === 0
+        ) {
+            continue;
+        }
 
         const identificacion = texto(f[cId]);
         const tercero = texto(f[cTercero]);
@@ -166,6 +179,8 @@ function leerImpuestos(filas: Fila[]): GrupoImpuesto[] | null {
             fecha: texto(f[cFecha]),
             base,
             retencion,
+            devolucionBase,
+            devolucionRetencion,
             persona: tipoPersona(identificacion, tercero),
         });
     }
@@ -263,7 +278,12 @@ export function resumenImpuestos(
     grupos: GrupoImpuesto[],
     categorias: Record<string, Categoria>,
     personas: Record<string, Persona>,
-): { lineas: Linea[]; total: Linea } {
+): {
+    lineas: Linea[];
+    total: Linea;
+    devoluciones: { base: number; retencion: number };
+} {
+    const devoluciones = { base: 0, retencion: 0 };
     const acum = {
         PN: { base: 0, ret: 0 },
         PJ: { base: 0, ret: 0 },
@@ -287,6 +307,8 @@ export function resumenImpuestos(
                       : acum[persona];
             destino.base += m.base;
             destino.ret += m.retencion;
+            devoluciones.base += m.devolucionBase;
+            devoluciones.retencion += m.devolucionRetencion;
         }
     }
 
@@ -321,7 +343,7 @@ export function resumenImpuestos(
         base: lineas.reduce((s, l) => s + (l.base ?? 0), 0),
         retencion: lineas.reduce((s, l) => s + l.retencion, 0),
     };
-    return { lineas, total };
+    return { lineas, total, devoluciones };
 }
 
 export interface ResumenBalance {
@@ -329,6 +351,8 @@ export interface ResumenBalance {
     /** Retenciones del balance que también salen en impuestos detallados. */
     otrasRetenciones: number;
     totalRetenciones2365: number;
+    /** Débitos en cuentas de retención (notas crédito), ya restados. */
+    devoluciones: number;
 }
 
 /**
@@ -352,8 +376,12 @@ export function resumenBalance(
     const auxiliares2365 = cuentas.filter(
         (c) => c.codigo.startsWith('2365') && esAuxiliar(c),
     );
+    // Crédito menos débito: las notas crédito (devoluciones) se debitan, en la
+    // misma cuenta o en una subcuenta propia, y restan la retención.
     const suma = (lista: CuentaBalance[]) =>
-        lista.reduce((s, c) => s + c.credito, 0);
+        lista.reduce((s, c) => s + c.credito - c.debito, 0);
+    // Los pagos a la DIAN se debitan en su propia cuenta y no son devoluciones.
+    const esPago = (c: CuentaBalance) => normalizar(c.nombre).includes('pago');
 
     const salarios = auxiliares2365.filter((c) => c.codigo.startsWith('236505'));
     const independientes = auxiliares2365.filter((c) =>
@@ -362,9 +390,7 @@ export function resumenBalance(
     const autorretencion = auxiliares2365.filter((c) =>
         c.codigo.startsWith('236575'),
     );
-    const pagos = auxiliares2365.filter((c) =>
-        /pago/i.test(normalizar(c.nombre)),
-    );
+    const pagos = auxiliares2365.filter(esPago);
     const apartadas = new Set(
         [...salarios, ...independientes, ...autorretencion, ...pagos].map(
             (c) => c.codigo,
@@ -398,7 +424,7 @@ export function resumenBalance(
     ];
 
     const reteIva = cuentas.filter(
-        (c) => c.codigo.startsWith('2367') && esAuxiliar(c),
+        (c) => c.codigo.startsWith('2367') && esAuxiliar(c) && !esPago(c),
     );
     if (reteIva.length > 0) {
         lineas.push({
@@ -409,9 +435,15 @@ export function resumenBalance(
         });
     }
 
+    const retenciones = [
+        ...auxiliares2365.filter((c) => !esPago(c)),
+        ...reteIva,
+    ];
+
     return {
         lineas,
         otrasRetenciones: suma(otras),
-        totalRetenciones2365: suma(auxiliares2365.filter((c) => !pagos.includes(c))),
+        totalRetenciones2365: suma(auxiliares2365.filter((c) => !esPago(c))),
+        devoluciones: retenciones.reduce((s, c) => s + c.debito, 0),
     };
 }

@@ -248,6 +248,15 @@ export default function Liquidador() {
                         filaTsv={filaTsv}
                         prefijo="imp"
                     />
+                    {(impuestos.devoluciones.base !== 0 ||
+                        impuestos.devoluciones.retencion !== 0) && (
+                        <p className="mt-4 text-sm text-slate-600">
+                            Ya se restaron devoluciones (notas crédito): base{' '}
+                            <b>{formato.format(impuestos.devoluciones.base)}</b>,
+                            retención{' '}
+                            <b>{formato.format(impuestos.devoluciones.retencion)}</b>.
+                        </p>
+                    )}
                     <Cuadre
                         etiqueta="Contra los subtotales del informe"
                         diferencia={impuestos.total.retencion - subtotalInforme}
@@ -286,6 +295,14 @@ export default function Liquidador() {
                         Total retenciones en el balance (cuenta 2365):{' '}
                         <b>{formato.format(balance.totalRetenciones2365)}</b>
                     </p>
+                    {balance.devoluciones !== 0 && (
+                        <p className="mt-1 text-sm text-slate-600">
+                            Ya se restaron débitos por devoluciones en las cuentas
+                            de retención:{' '}
+                            <b>{formato.format(balance.devoluciones)}</b> (los
+                            pagos a la DIAN no se restan).
+                        </p>
+                    )}
                 </Tarjeta>
             )}
 
@@ -348,6 +365,15 @@ export default function Liquidador() {
                                                         >
                                                             <td className="py-1 pr-3 whitespace-nowrap text-slate-500">
                                                                 {m.comprobante}
+                                                                {(m.devolucionBase !== 0 ||
+                                                                    m.devolucionRetencion !== 0) && (
+                                                                    <span
+                                                                        title="Tiene devolución (nota crédito); los valores ya vienen restados"
+                                                                        className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-xs font-semibold text-amber-800"
+                                                                    >
+                                                                        Devolución
+                                                                    </span>
+                                                                )}
                                                             </td>
                                                             <td className="py-1 pr-3">
                                                                 {m.tercero}
@@ -377,10 +403,14 @@ export default function Liquidador() {
                                                                     {persona}
                                                                 </button>
                                                             </td>
-                                                            <td className="py-1 pr-3 text-right tabular-nums">
+                                                            <td
+                                                                className={`py-1 pr-3 text-right tabular-nums ${m.base < 0 ? 'text-red-600' : ''}`}
+                                                            >
                                                                 {formato.format(m.base)}
                                                             </td>
-                                                            <td className="py-1 text-right tabular-nums">
+                                                            <td
+                                                                className={`py-1 text-right tabular-nums ${m.retencion < 0 ? 'text-red-600' : ''}`}
+                                                            >
                                                                 {formato.format(m.retencion)}
                                                             </td>
                                                         </tr>
