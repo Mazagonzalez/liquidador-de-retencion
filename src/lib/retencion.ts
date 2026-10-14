@@ -210,16 +210,36 @@ function leerBalance(filas: Fila[]): CuentaBalance[] | null {
     return cuentas;
 }
 
+/**
+ * Algunos Excel de Siigo declaran un rango falso (p. ej. "A1:A27") y la
+ * librería ignora las celdas por fuera; se recalcula con las celdas reales.
+ */
+function corregirRango(hoja: XLSX.WorkSheet) {
+    const rango = { s: { r: Infinity, c: Infinity }, e: { r: -1, c: -1 } };
+    for (const clave of Object.keys(hoja)) {
+        if (clave.startsWith('!')) continue;
+        const { r, c } = XLSX.utils.decode_cell(clave);
+        rango.s.r = Math.min(rango.s.r, r);
+        rango.s.c = Math.min(rango.s.c, c);
+        rango.e.r = Math.max(rango.e.r, r);
+        rango.e.c = Math.max(rango.e.c, c);
+    }
+    if (rango.e.r >= 0) hoja['!ref'] = XLSX.utils.encode_range(rango);
+}
+
 /** Busca en todas las hojas del archivo el informe de impuestos y el balance. */
 export async function leerArchivo(archivo: File): Promise<Hojas> {
     const resultado: Hojas = { impuestos: null, balance: null };
     const libro = XLSX.read(await archivo.arrayBuffer(), { type: 'array' });
 
     for (const nombreHoja of libro.SheetNames) {
-        const filas = XLSX.utils.sheet_to_json<Fila>(
-            libro.Sheets[nombreHoja],
-            { header: 1, raw: true, defval: null },
-        );
+        const hoja = libro.Sheets[nombreHoja];
+        corregirRango(hoja);
+        const filas = XLSX.utils.sheet_to_json<Fila>(hoja, {
+            header: 1,
+            raw: true,
+            defval: null,
+        });
         const impuestos = leerImpuestos(filas);
         if (impuestos) {
             resultado.impuestos ??= impuestos;
@@ -311,13 +331,24 @@ export interface ResumenBalance {
     totalRetenciones2365: number;
 }
 
-const esAuxiliar = (c: CuentaBalance) =>
-    c.nivel === 'auxiliar' || c.codigo.length >= 8;
+/**
+ * Cuentas de último nivel (sin subcuentas debajo), sea auxiliar o
+ * subauxiliar, para no sumar dos veces el mismo valor.
+ */
+function cuentasHoja(cuentas: CuentaBalance[]): Set<string> {
+    const codigos = [...new Set(cuentas.map((c) => c.codigo))].sort();
+    // Al ordenar como texto, las subcuentas quedan justo después de su cuenta.
+    return new Set(
+        codigos.filter((c, i) => !codigos[i + 1]?.startsWith(c)),
+    );
+}
 
 export function resumenBalance(
     cuentas: CuentaBalance[],
     tarifaAutorretencion: number,
 ): ResumenBalance {
+    const hojas = cuentasHoja(cuentas);
+    const esAuxiliar = (c: CuentaBalance) => hojas.has(c.codigo);
     const auxiliares2365 = cuentas.filter(
         (c) => c.codigo.startsWith('2365') && esAuxiliar(c),
     );
