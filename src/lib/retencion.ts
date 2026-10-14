@@ -35,7 +35,6 @@ export interface CuentaBalance {
 export interface Hojas {
     impuestos: GrupoImpuesto[] | null;
     balance: CuentaBalance[] | null;
-    avisos: string[];
 }
 
 /** Quita tildes y todo lo que no sea letra/número para comparar encabezados. */
@@ -211,38 +210,22 @@ function leerBalance(filas: Fila[]): CuentaBalance[] | null {
     return cuentas;
 }
 
-export async function leerArchivos(archivos: File[]): Promise<Hojas> {
-    const resultado: Hojas = { impuestos: null, balance: null, avisos: [] };
+/** Busca en todas las hojas del archivo el informe de impuestos y el balance. */
+export async function leerArchivo(archivo: File): Promise<Hojas> {
+    const resultado: Hojas = { impuestos: null, balance: null };
+    const libro = XLSX.read(await archivo.arrayBuffer(), { type: 'array' });
 
-    for (const archivo of archivos) {
-        const libro = XLSX.read(await archivo.arrayBuffer(), {
-            type: 'array',
-        });
-        for (const nombreHoja of libro.SheetNames) {
-            const filas = XLSX.utils.sheet_to_json<Fila>(
-                libro.Sheets[nombreHoja],
-                { header: 1, raw: true, defval: null },
-            );
-            const impuestos = leerImpuestos(filas);
-            if (impuestos) {
-                if (resultado.impuestos) {
-                    resultado.avisos.push(
-                        `Se encontró más de un informe de impuestos detallados; se usó "${nombreHoja}" de ${archivo.name}.`,
-                    );
-                }
-                resultado.impuestos = impuestos;
-                continue;
-            }
-            const balance = leerBalance(filas);
-            if (balance) {
-                if (resultado.balance) {
-                    resultado.avisos.push(
-                        `Se encontró más de un balance; se usó "${nombreHoja}" de ${archivo.name}.`,
-                    );
-                }
-                resultado.balance = balance;
-            }
+    for (const nombreHoja of libro.SheetNames) {
+        const filas = XLSX.utils.sheet_to_json<Fila>(
+            libro.Sheets[nombreHoja],
+            { header: 1, raw: true, defval: null },
+        );
+        const impuestos = leerImpuestos(filas);
+        if (impuestos) {
+            resultado.impuestos ??= impuestos;
+            continue;
         }
+        resultado.balance ??= leerBalance(filas);
     }
     return resultado;
 }
@@ -362,6 +345,12 @@ export function resumenBalance(
     const baseAutorretencion = ingresos ? ingresos.credito - ingresos.debito : 0;
 
     const lineas: Linea[] = [
+        {
+            clave: 'autorretencionCalc',
+            concepto: `AUTORRETENCIÓN (clase 4 crédito − débito × ${String(tarifaAutorretencion).replace('.', ',')}%)`,
+            base: baseAutorretencion,
+            retencion: (baseAutorretencion * tarifaAutorretencion) / 100,
+        },
         { clave: 'salarios', concepto: 'SALARIOS', base: null, retencion: suma(salarios) },
         {
             clave: 'honorariosPN',
@@ -374,12 +363,6 @@ export function resumenBalance(
             concepto: 'AUTORRETENCIÓN (balance)',
             base: null,
             retencion: suma(autorretencion),
-        },
-        {
-            clave: 'autorretencionCalc',
-            concepto: `AUTORRETENCIÓN (ingresos × ${String(tarifaAutorretencion).replace('.', ',')}%)`,
-            base: baseAutorretencion,
-            retencion: (baseAutorretencion * tarifaAutorretencion) / 100,
         },
     ];
 

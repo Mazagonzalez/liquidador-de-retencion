@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-    leerArchivos,
+    leerArchivo,
     resumenBalance,
     resumenImpuestos,
     type Categoria,
-    type Hojas,
+    type CuentaBalance,
+    type GrupoImpuesto,
     type Linea,
     type Persona,
 } from '@/lib/retencion';
 
 type Separador = ',' | '.';
+type TipoArchivo = 'impuestos' | 'balance';
 
 const formato = new Intl.NumberFormat('es-CO', {
     minimumFractionDigits: 2,
@@ -48,12 +50,22 @@ const nombresCategoria: Record<Categoria, string> = {
     excluir: 'No incluir',
 };
 
+interface EstadoCarga {
+    archivo: string | null;
+    error: string | null;
+    cargando: boolean;
+}
+
+const cargaVacia: EstadoCarga = { archivo: null, error: null, cargando: false };
+
 export default function Liquidador() {
-    const [hojas, setHojas] = useState<Hojas | null>(null);
-    const [archivos, setArchivos] = useState<string[]>([]);
+    const [grupos, setGrupos] = useState<GrupoImpuesto[] | null>(null);
+    const [cuentas, setCuentas] = useState<CuentaBalance[] | null>(null);
+    const [carga, setCarga] = useState<Record<TipoArchivo, EstadoCarga>>({
+        impuestos: cargaVacia,
+        balance: cargaVacia,
+    });
     const [error, setError] = useState<string | null>(null);
-    const [cargando, setCargando] = useState(false);
-    const [arrastrando, setArrastrando] = useState(false);
     const [categorias, setCategorias] = useState<Record<string, Categoria>>({});
     const [personas, setPersonas] = useState<Record<string, Persona>>({});
     const [copiado, setCopiado] = useState<string | null>(null);
@@ -67,53 +79,74 @@ export default function Liquidador() {
     useEffect(() => guardarPreferencia('separador', separador), [separador]);
     useEffect(() => guardarPreferencia('tarifaAutorretencion', tarifa), [tarifa]);
 
-    async function cargar(lista: FileList | null) {
-        if (!lista || lista.length === 0) return;
-        setCargando(true);
-        setError(null);
+    const actualizarCarga = (tipo: TipoArchivo, cambios: Partial<EstadoCarga>) =>
+        setCarga((c) => ({ ...c, [tipo]: { ...c[tipo], ...cambios } }));
+
+    async function cargar(tipo: TipoArchivo, archivo: File | undefined) {
+        if (!archivo) return;
+        actualizarCarga(tipo, { cargando: true, error: null });
         try {
-            const files = Array.from(lista);
-            const resultado = await leerArchivos(files);
-            if (!resultado.impuestos && !resultado.balance) {
-                setError(
-                    'No encontré ni el informe de impuestos detallados ni el balance de prueba en ese archivo.',
-                );
-                return;
+            const hojas = await leerArchivo(archivo);
+            if (tipo === 'impuestos') {
+                if (!hojas.impuestos) {
+                    actualizarCarga(tipo, {
+                        cargando: false,
+                        error: hojas.balance
+                            ? 'Este archivo es el balance de prueba. Súbelo en la casilla del balance.'
+                            : 'No encontré el informe de impuestos detallados (la columna “Base compras”).',
+                    });
+                    return;
+                }
+                setGrupos(hojas.impuestos);
+                setCategorias({});
+                setPersonas({});
+            } else {
+                if (!hojas.balance) {
+                    actualizarCarga(tipo, {
+                        cargando: false,
+                        error: hojas.impuestos
+                            ? 'Este archivo es el informe de impuestos detallados. Súbelo en la otra casilla.'
+                            : 'No encontré el balance de prueba (las columnas “Código cuenta contable” y “Movimiento crédito”).',
+                    });
+                    return;
+                }
+                setCuentas(hojas.balance);
             }
-            setHojas(resultado);
-            setArchivos(files.map((f) => f.name));
-            setCategorias({});
-            setPersonas({});
+            actualizarCarga(tipo, { cargando: false, archivo: archivo.name });
         } catch (e) {
             console.error(e);
-            setError('No pude leer el archivo. ¿Es un Excel (.xlsx o .xls)?');
-        } finally {
-            setCargando(false);
+            actualizarCarga(tipo, {
+                cargando: false,
+                error: 'No pude leer el archivo. ¿Es un Excel (.xlsx o .xls)?',
+            });
         }
     }
 
+    function quitar(tipo: TipoArchivo) {
+        if (tipo === 'impuestos') setGrupos(null);
+        else setCuentas(null);
+        actualizarCarga(tipo, cargaVacia);
+    }
+
     const impuestos = useMemo(
-        () =>
-            hojas?.impuestos
-                ? resumenImpuestos(hojas.impuestos, categorias, personas)
-                : null,
-        [hojas, categorias, personas],
+        () => (grupos ? resumenImpuestos(grupos, categorias, personas) : null),
+        [grupos, categorias, personas],
     );
 
     const balance = useMemo(
-        () => (hojas?.balance ? resumenBalance(hojas.balance, tarifa) : null),
-        [hojas, tarifa],
+        () => (cuentas ? resumenBalance(cuentas, tarifa) : null),
+        [cuentas, tarifa],
     );
 
     const subtotalInforme = useMemo(() => {
-        if (!hojas?.impuestos) return 0;
-        return hojas.impuestos
+        if (!grupos) return 0;
+        return grupos
             .filter(
                 (g) =>
                     (categorias[g.nombre] ?? g.categoriaSugerida) !== 'excluir',
             )
             .reduce((s, g) => s + g.subtotalRetencion, 0);
-    }, [hojas, categorias]);
+    }, [grupos, categorias]);
 
     async function copiar(clave: string, contenido: string) {
         try {
@@ -134,51 +167,28 @@ export default function Liquidador() {
             <header className="mb-8">
                 <h1 className="text-3xl font-bold">Liquidador de retención</h1>
                 <p className="mt-2 text-slate-600">
-                    Sube el Excel con el informe de <b>impuestos detallados</b> y
-                    el <b>balance de prueba</b> de Siigo (en un solo archivo o en
-                    dos). Los archivos se leen en tu computador; no se envían a
-                    ningún lado.
+                    Sube por separado el informe de <b>impuestos detallados</b> y
+                    el <b>balance de prueba</b> de Siigo. Los archivos se leen en
+                    tu computador; no se envían a ningún lado.
                 </p>
             </header>
 
-            <label
-                onDragOver={(e) => {
-                    e.preventDefault();
-                    setArrastrando(true);
-                }}
-                onDragLeave={() => setArrastrando(false)}
-                onDrop={(e) => {
-                    e.preventDefault();
-                    setArrastrando(false);
-                    cargar(e.dataTransfer.files);
-                }}
-                className={`flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-10 text-center transition-colors ${
-                    arrastrando
-                        ? 'border-emerald-500 bg-emerald-50'
-                        : 'border-slate-300 bg-slate-50 hover:border-slate-400'
-                }`}
-            >
-                <span className="text-lg font-semibold">
-                    {cargando
-                        ? 'Leyendo…'
-                        : 'Arrastra aquí el Excel o haz clic para buscarlo'}
-                </span>
-                {archivos.length > 0 && (
-                    <span className="mt-2 text-sm text-slate-500">
-                        Cargado: {archivos.join(', ')}
-                    </span>
-                )}
-                <input
-                    type="file"
-                    accept=".xlsx,.xls,.xlsm"
-                    multiple
-                    className="sr-only"
-                    onChange={(e) => {
-                        cargar(e.target.files);
-                        e.target.value = '';
-                    }}
+            <div className="grid gap-4 md:grid-cols-2">
+                <ZonaCarga
+                    titulo="Impuestos detallados"
+                    descripcion="Saca PN, PJ, arriendo y compras."
+                    estado={carga.impuestos}
+                    onArchivo={(f) => cargar('impuestos', f)}
+                    onQuitar={() => quitar('impuestos')}
                 />
-            </label>
+                <ZonaCarga
+                    titulo="Balance de prueba"
+                    descripcion="Saca la autorretención (clase 4 × tarifa) y las cuentas 2365."
+                    estado={carga.balance}
+                    onArchivo={(f) => cargar('balance', f)}
+                    onQuitar={() => quitar('balance')}
+                />
+            </div>
 
             <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-slate-700">
                 <label className="flex items-center gap-2">
@@ -210,27 +220,6 @@ export default function Liquidador() {
                 <p className="mt-4 rounded-lg bg-red-50 px-4 py-3 text-red-700">
                     {error}
                 </p>
-            )}
-            {hojas?.avisos.map((a) => (
-                <p
-                    key={a}
-                    className="mt-4 rounded-lg bg-amber-50 px-4 py-3 text-amber-800"
-                >
-                    {a}
-                </p>
-            ))}
-
-            {hojas && !hojas.impuestos && (
-                <Aviso>
-                    No encontré el informe de impuestos detallados (la hoja con
-                    la columna “Base compras”).
-                </Aviso>
-            )}
-            {hojas && !hojas.balance && (
-                <Aviso>
-                    No encontré el balance de prueba (la hoja con “Código cuenta
-                    contable” y “Movimiento crédito”).
-                </Aviso>
             )}
 
             {impuestos && (
@@ -297,19 +286,19 @@ export default function Liquidador() {
                         Total retenciones en el balance (cuenta 2365):{' '}
                         <b>{formato.format(balance.totalRetenciones2365)}</b>
                     </p>
-                    {impuestos && (
-                        <Cuadre
-                            etiqueta="Resto de la 2365 contra impuestos detallados"
-                            diferencia={
-                                balance.otrasRetenciones -
-                                impuestos.total.retencion
-                            }
-                        />
-                    )}
                 </Tarjeta>
             )}
 
-            {hojas?.impuestos && (
+            {impuestos && balance && (
+                <Cuadre
+                    etiqueta="Cruce: retenciones de la 2365 contra impuestos detallados"
+                    diferencia={
+                        balance.otrasRetenciones - impuestos.total.retencion
+                    }
+                />
+            )}
+
+            {grupos && (
                 <Tarjeta titulo="Detalle (para revisar)">
                     <p className="mb-4 text-sm text-slate-600">
                         Si algo quedó mal clasificado, cambia la categoría del
@@ -317,7 +306,7 @@ export default function Liquidador() {
                         arriba se recalculan solos.
                     </p>
                     <div className="space-y-6">
-                        {hojas.impuestos.map((g) => {
+                        {grupos.map((g) => {
                             const cat = categorias[g.nombre] ?? g.categoriaSugerida;
                             return (
                                 <div key={g.nombre}>
@@ -430,11 +419,77 @@ function Tarjeta({
     );
 }
 
-function Aviso({ children }: { children: React.ReactNode }) {
+function ZonaCarga({
+    titulo,
+    descripcion,
+    estado,
+    onArchivo,
+    onQuitar,
+}: {
+    titulo: string;
+    descripcion: string;
+    estado: EstadoCarga;
+    onArchivo: (archivo: File | undefined) => void;
+    onQuitar: () => void;
+}) {
+    const [arrastrando, setArrastrando] = useState(false);
+    const cargado = estado.archivo !== null;
+
     return (
-        <p className="mt-4 rounded-lg bg-amber-50 px-4 py-3 text-amber-800">
-            {children}
-        </p>
+        <div>
+            <label
+                onDragOver={(e) => {
+                    e.preventDefault();
+                    setArrastrando(true);
+                }}
+                onDragLeave={() => setArrastrando(false)}
+                onDrop={(e) => {
+                    e.preventDefault();
+                    setArrastrando(false);
+                    onArchivo(e.dataTransfer.files[0]);
+                }}
+                className={`flex h-full cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-8 text-center transition-colors ${
+                    arrastrando
+                        ? 'border-emerald-500 bg-emerald-50'
+                        : cargado
+                          ? 'border-emerald-300 bg-emerald-50/50'
+                          : 'border-slate-300 bg-slate-50 hover:border-slate-400'
+                }`}
+            >
+                <span className="text-lg font-semibold">{titulo}</span>
+                <span className="mt-1 text-sm text-slate-500">{descripcion}</span>
+                <span className="mt-3 text-sm font-medium text-slate-700">
+                    {estado.cargando
+                        ? 'Leyendo…'
+                        : cargado
+                          ? `✓ ${estado.archivo}`
+                          : 'Arrastra el Excel aquí o haz clic para buscarlo'}
+                </span>
+                <input
+                    type="file"
+                    accept=".xlsx,.xls,.xlsm"
+                    className="sr-only"
+                    onChange={(e) => {
+                        onArchivo(e.target.files?.[0]);
+                        e.target.value = '';
+                    }}
+                />
+            </label>
+            {cargado && (
+                <button
+                    type="button"
+                    onClick={onQuitar}
+                    className="mt-1 text-sm text-slate-500 underline hover:text-slate-800"
+                >
+                    Quitar archivo
+                </button>
+            )}
+            {estado.error && (
+                <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+                    {estado.error}
+                </p>
+            )}
+        </div>
     );
 }
 
