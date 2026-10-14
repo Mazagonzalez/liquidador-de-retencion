@@ -1,0 +1,48 @@
+---
+import { ClientRouter } from "astro:transitions";
+import "../styles/global.css";
+
+interface Props {
+	title?: string;
+	description?: string;
+}
+
+const {
+	title = "Hi",
+	description = "this is my website",
+} = Astro.props;
+---
+
+<html lang="es">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="generator" content={Astro.generator} />
+		<title>{title}</title>
+		<meta name="description" content={description} />
+
+		<ClientRouter transition:persist />
+
+		<!-- Favicon -->
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+	</head>
+	<body class="scrollbar">
+		<main>
+			<slot />
+		</main>
+	</body>
+</html>
+
+<style is:global>
+	html {
+		background-color: white;
+		color: black;
+		scroll-behavior: smooth;
+	}
+
+	@media(prefers-reduced-motion: reduce){
+        html{
+        	scroll-behavior: auto;
+        }
+	}
+</style>

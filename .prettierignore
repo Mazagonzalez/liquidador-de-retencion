@@ -1,0 +1,6 @@
+dist/
+.astro/
+.vercel/
+.vscode/
+generated/
+pnpm-lock.yaml

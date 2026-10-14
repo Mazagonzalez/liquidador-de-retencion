@@ -1,0 +1,34 @@
+/* Flex box */
+.center-content{
+    @apply flex justify-center items-center
+}
+
+.row{
+    @apply flex flex-row
+}
+
+.col{
+    @apply flex flex-col
+}
+
+.row-reverse{
+    @apply flex flex-row-reverse
+}
+
+.col-reverse{
+    @apply flex flex-col-reverse
+}
+
+/* Position */
+.absolute-center-x{
+    @apply absolute left-1/2 -translate-x-1/2
+}
+
+.absolute-center-y{
+    @apply absolute top-1/2 -translate-y-1/2
+}
+
+.absolute-center{
+    @apply absolute top-1/2 -translate-y-1/2 left-1/2 -translate-x-1/2
+}
+
