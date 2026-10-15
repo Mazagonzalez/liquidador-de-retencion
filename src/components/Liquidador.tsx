@@ -145,7 +145,15 @@ export default function Liquidador() {
                 (g) =>
                     (categorias[g.nombre] ?? g.categoriaSugerida) !== 'excluir',
             )
-            .reduce((s, g) => s + g.subtotalRetencion, 0);
+            .reduce(
+                (s, g) =>
+                    s +
+                    g.subtotalRetencion -
+                    g.movimientos
+                        .filter((m) => m.cierre)
+                        .reduce((t, m) => t + m.retencion, 0),
+                0,
+            );
     }, [grupos, categorias]);
 
     async function copiar(clave: string, contenido: string) {
@@ -295,13 +303,46 @@ export default function Liquidador() {
                         Total retenciones en el balance (cuenta 2365):{' '}
                         <b>{formato.format(balance.totalRetenciones2365)}</b>
                     </p>
-                    {balance.devoluciones !== 0 && (
-                        <p className="mt-1 text-sm text-slate-600">
-                            Ya se restaron débitos por devoluciones en las cuentas
-                            de retención:{' '}
-                            <b>{formato.format(balance.devoluciones)}</b> (los
-                            pagos a la DIAN no se restan).
-                        </p>
+                    {balance.devoluciones.length > 0 && (
+                        <div className="mt-6">
+                            <h3 className="font-semibold">
+                                Devoluciones en el balance
+                            </h3>
+                            <p className="mt-1 text-sm text-slate-600">
+                                Débitos de las subcuentas de devolución. Ya están
+                                restados en los valores de arriba.
+                            </p>
+                            <div className="mt-2 overflow-x-auto">
+                                <table className="w-full text-sm">
+                                    <thead>
+                                        <tr className="text-left text-slate-500">
+                                            <th className="pb-1 font-medium">Cuenta</th>
+                                            <th className="pb-1 text-right font-medium">
+                                                Devolución (débito)
+                                            </th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {balance.devoluciones.map((c) => (
+                                            <tr
+                                                key={c.codigo}
+                                                className="border-t border-slate-100"
+                                            >
+                                                <td className="py-1 pr-3">
+                                                    <span className="text-slate-500">
+                                                        {c.codigo}
+                                                    </span>{' '}
+                                                    {c.nombre}
+                                                </td>
+                                                <td className="py-1 text-right tabular-nums text-red-600">
+                                                    −{formato.format(c.debito)}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
                     )}
                 </Tarjeta>
             )}
@@ -361,10 +402,18 @@ export default function Liquidador() {
                                                     return (
                                                         <tr
                                                             key={`${m.comprobante}-${i}`}
-                                                            className="border-t border-slate-100"
+                                                            className={`border-t border-slate-100 ${m.cierre ? 'opacity-50' : ''}`}
                                                         >
                                                             <td className="py-1 pr-3 whitespace-nowrap text-slate-500">
                                                                 {m.comprobante}
+                                                                {m.cierre && (
+                                                                    <span
+                                                                        title="Cierre del mes contra la DIAN: cancela las retenciones y no se suma"
+                                                                        className="ml-2 rounded bg-slate-200 px-1.5 py-0.5 text-xs font-semibold text-slate-700"
+                                                                    >
+                                                                        Cierre DIAN · no se suma
+                                                                    </span>
+                                                                )}
                                                                 {(m.devolucionBase !== 0 ||
                                                                     m.devolucionRetencion !== 0) && (
                                                                     <span

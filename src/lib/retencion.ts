@@ -16,6 +16,8 @@ export interface Movimiento {
     devolucionBase: number;
     devolucionRetencion: number;
     persona: Persona;
+    /** Cierre del mes contra la DIAN: cancela las retenciones, no se suma. */
+    cierre: boolean;
 }
 
 export interface GrupoImpuesto {
@@ -95,6 +97,16 @@ export function tipoPersona(identificacion: string, nombre: string): Persona {
         return 'PJ';
     }
     return 'PN';
+}
+
+/** NIT de la DIAN (800197268) o su nombre como tercero. */
+function esCierreDian(identificacion: string, nombre: string): boolean {
+    return (
+        identificacion.replace(/\D/g, '').startsWith('800197268') ||
+        /^(DIAN|DIRECCION DE IMPUESTOS)/i.test(
+            nombre.normalize('NFD').replace(/[̀-ͯ]/g, ''),
+        )
+    );
 }
 
 function sugerirCategoria(nombreGrupo: string): Categoria {
@@ -182,6 +194,7 @@ function leerImpuestos(filas: Fila[]): GrupoImpuesto[] | null {
             devolucionBase,
             devolucionRetencion,
             persona: tipoPersona(identificacion, tercero),
+            cierre: esCierreDian(identificacion, tercero),
         });
     }
 
@@ -296,6 +309,7 @@ export function resumenImpuestos(
         const cat = categorias[g.nombre] ?? g.categoriaSugerida;
         if (cat === 'excluir') continue;
         for (const m of g.movimientos) {
+            if (m.cierre) continue;
             const persona = personas[m.identificacion] ?? m.persona;
             const destino =
                 cat === 'arriendo'
@@ -351,9 +365,12 @@ export interface ResumenBalance {
     /** Retenciones del balance que también salen en impuestos detallados. */
     otrasRetenciones: number;
     totalRetenciones2365: number;
-    /** Débitos en cuentas de retención (notas crédito), ya restados. */
-    devoluciones: number;
+    /** Cuentas con débitos (notas crédito) que ya se restaron. */
+    devoluciones: CuentaBalance[];
 }
+
+const esDevolucion = (c: CuentaBalance) =>
+    normalizar(c.nombre).includes('devoluci');
 
 /**
  * Cuentas de último nivel (sin subcuentas debajo), sea auxiliar o
@@ -376,11 +393,14 @@ export function resumenBalance(
     const auxiliares2365 = cuentas.filter(
         (c) => c.codigo.startsWith('2365') && esAuxiliar(c),
     );
-    // Crédito menos débito: las notas crédito (devoluciones) se debitan, en la
-    // misma cuenta o en una subcuenta propia, y restan la retención.
+    // En las cuentas normales solo cuenta el crédito: el débito es el cierre o
+    // pago a la DIAN. Las notas crédito se debitan en subcuentas propias
+    // ("Devolución ...") y esos débitos restan.
     const suma = (lista: CuentaBalance[]) =>
-        lista.reduce((s, c) => s + c.credito - c.debito, 0);
-    // Los pagos a la DIAN se debitan en su propia cuenta y no son devoluciones.
+        lista.reduce(
+            (s, c) => s + (esDevolucion(c) ? -c.debito : c.credito),
+            0,
+        );
     const esPago = (c: CuentaBalance) => normalizar(c.nombre).includes('pago');
 
     const salarios = auxiliares2365.filter((c) => c.codigo.startsWith('236505'));
@@ -435,15 +455,21 @@ export function resumenBalance(
         });
     }
 
-    const retenciones = [
-        ...auxiliares2365.filter((c) => !esPago(c)),
-        ...reteIva,
-    ];
+    // Subcuentas de devolución con movimiento: retenciones e ingresos.
+    const devoluciones = cuentas.filter(
+        (c) =>
+            esAuxiliar(c) &&
+            esDevolucion(c) &&
+            c.debito !== 0 &&
+            (c.codigo.startsWith('2365') ||
+                c.codigo.startsWith('2367') ||
+                c.codigo.startsWith('4')),
+    );
 
     return {
         lineas,
         otrasRetenciones: suma(otras),
         totalRetenciones2365: suma(auxiliares2365.filter((c) => !esPago(c))),
-        devoluciones: retenciones.reduce((s, c) => s + c.debito, 0),
+        devoluciones,
     };
 }
